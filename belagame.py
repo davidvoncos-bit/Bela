@@ -197,28 +197,34 @@ def show_hands_images(hands):
         message_box.see("end")
     
     # --- Frames for hands ---
-    top_f    = tk.Frame(root)
+    top_f = tk.Frame(root, width=360, height=260)
     top_f.grid(row=0, column=1, pady=8)
+    top_f.grid_propagate(False)
     
-    bottom_f = tk.Frame(root)
+    bottom_f = tk.Frame(root, width=360, height=260)
     bottom_f.grid(row=2, column=1, pady=8)
+    bottom_f.grid_propagate(False)
     
-    left_f   = tk.Frame(root)
+    left_f = tk.Frame(root, width=260, height=500)
     left_f.grid(row=1, column=0, padx=8, sticky="ns")
     left_f.grid_propagate(False)
     
-    right_f  = tk.Frame(root)
+    right_f = tk.Frame(root, width=260, height=500)
     right_f.grid(row=1, column=2, padx=8, sticky="ns")
     right_f.grid_propagate(False)
     
     # --- Center "table" ---
-    center_f = tk.Frame(root, width=500, height=400, relief="groove", borderwidth=3, bg="green")
-    center_f.grid(row=1, column=1, sticky="nsew")
-    center_f.grid_propagate(False)
+    center_f = tk.Frame(root, relief="groove", borderwidth=3, bg="green")
+    center_f.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
     
-    # Make the grid expandable
-    root.grid_rowconfigure(1, weight=1)
-    root.grid_columnconfigure(1, weight=1)
+    # --- Root grid sizing ---
+    root.grid_rowconfigure(0, weight=1, minsize=260)
+    root.grid_rowconfigure(1, weight=1, minsize=280)
+    root.grid_rowconfigure(2, weight=1, minsize=260)
+    
+    root.grid_columnconfigure(0, weight=1, minsize=280)
+    root.grid_columnconfigure(1, weight=1, minsize=360)
+    root.grid_columnconfigure(2, weight=1, minsize=280)
     
     controls_f = tk.Frame(root)
     controls_f.grid(row=3, column=1, pady=10)
@@ -256,69 +262,100 @@ def show_hands_images(hands):
     team_scores = {"A": 0, "B": 0}
 
 
-
     def draw_hands():
-        """Draw all four players’ hands in their frames"""
+        """Draw all four players' hands in a 2x4 layout"""
         # Clear old hand widgets first
         for i in range(4):
             for w in card_widgets[i]:
                 w.destroy()
             card_widgets[i] = []
     
-        # ---- Bottom player (0) ----
-        for card in hands[0]:
+        # Give side frames enough room for 2 rotated columns
+        try:
+            left_f.config(width=280, height=520)
+            right_f.config(width=280, height=520)
+            left_f.grid_propagate(False)
+            right_f.grid_propagate(False)
+        except Exception:
             try:
-                im = load_card_image(card, size=(90, 135))
-                lbl = tk.Label(bottom_f, image=im); lbl.image = im; root.images.append(im)
+                left_f.pack_propagate(False)
+                right_f.pack_propagate(False)
+            except Exception:
+                pass
+    
+        def place_horizontal_2x4(lbl, index):
+            row = index // 4
+            col = index % 4
+            lbl.grid(row=row, column=col, padx=3, pady=3)
+    
+        def place_vertical_2x4(lbl, index):
+            # 2x4 from side player's point of view -> 4x2 on screen
+            row = index % 4
+            col = index // 4
+            lbl.grid(row=row, column=col, padx=0, pady=1)
+    
+        # ---- Bottom player (0) ----
+        for i, card in enumerate(hands[0]):
+            try:
+                im = load_card_image(card, size=(80, 120))
+                lbl = tk.Label(bottom_f, image=im, bd=0)
+                lbl.image = im
+                root.images.append(im)
                 lbl.card_name = card
                 lbl.card_rotate = 0
-                lbl.pack(side="left", padx=4)
                 lbl.bind("<Button-1>", partial(on_card_click, 0, card, lbl))
             except FileNotFoundError:
-                lbl = tk.Label(bottom_f, text=card, font=("Arial", 12))
-                lbl.pack(side="left", padx=4)
+                lbl = tk.Label(bottom_f, text=card, font=("Arial", 10))
+    
+            place_horizontal_2x4(lbl, i)
             card_widgets[0].append(lbl)
     
         # ---- Right player (1) ----
-        for card in hands[1]:
+        for i, card in enumerate(hands[1]):
             try:
-                im = load_card_image(card, size=(75, 110), rotate=-90)
-                lbl = tk.Label(right_f, image=im); lbl.image = im; root.images.append(im)
+                im = load_card_image(card, size=(80, 120), rotate=-90)
+                lbl = tk.Label(right_f, image=im, bd=0)
+                lbl.image = im
+                root.images.append(im)
                 lbl.card_name = card
                 lbl.card_rotate = -90
-                lbl.pack(side="top", pady=2)
                 lbl.bind("<Button-1>", partial(on_card_click, 1, card, lbl))
             except FileNotFoundError:
-                lbl = tk.Label(right_f, text=card, font=("Arial", 12))
-                lbl.pack(side="top", pady=2)
+                lbl = tk.Label(right_f, text=card, font=("Arial", 9))
+    
+            place_vertical_2x4(lbl, i)
             card_widgets[1].append(lbl)
     
         # ---- Top player (2) ----
-        for card in hands[2]:
+        for i, card in enumerate(hands[2]):
             try:
-                im = load_card_image(card, size=(90, 135))
-                lbl = tk.Label(top_f, image=im); lbl.image = im; root.images.append(im)
+                im = load_card_image(card, size=(80, 120))
+                lbl = tk.Label(top_f, image=im, bd=0)
+                lbl.image = im
+                root.images.append(im)
                 lbl.card_name = card
                 lbl.card_rotate = 0
-                lbl.pack(side="left", padx=4)
                 lbl.bind("<Button-1>", partial(on_card_click, 2, card, lbl))
             except FileNotFoundError:
-                lbl = tk.Label(top_f, text=card, font=("Arial", 12))
-                lbl.pack(side="left", padx=4)
+                lbl = tk.Label(top_f, text=card, font=("Arial", 10))
+    
+            place_horizontal_2x4(lbl, i)
             card_widgets[2].append(lbl)
     
         # ---- Left player (3) ----
-        for card in hands[3]:
+        for i, card in enumerate(hands[3]):
             try:
-                im = load_card_image(card, size=(75, 110), rotate=90)
-                lbl = tk.Label(left_f, image=im); lbl.image = im; root.images.append(im)
+                im = load_card_image(card, size=(80, 120), rotate=90)
+                lbl = tk.Label(left_f, image=im, bd=0)
+                lbl.image = im
+                root.images.append(im)
                 lbl.card_name = card
                 lbl.card_rotate = 90
-                lbl.pack(side="top", pady=2)
                 lbl.bind("<Button-1>", partial(on_card_click, 3, card, lbl))
             except FileNotFoundError:
-                lbl = tk.Label(left_f, text=card, font=("Arial", 12))
-                lbl.pack(side="top", pady=2)
+                lbl = tk.Label(left_f, text=card, font=("Arial", 9))
+    
+            place_vertical_2x4(lbl, i)
             card_widgets[3].append(lbl)
     
     
