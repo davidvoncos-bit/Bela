@@ -225,6 +225,19 @@ def compare_sequence_tops(rank1, rank2):
     return 0
 
 
+def compare_four_kind(rank1, rank2):
+    """
+    Compare sequence top cards using order AXKDJ987 where higher wins.
+    Internally we map that to increasing strength: 7 < 8 < 9 < J < D < K < X < A.
+    """
+    idx = {rank: i for i, rank in enumerate(NON_TRUMP_ORDER)}
+    if idx[rank1] > idx[rank2]:
+        return 1
+    if idx[rank1] < idx[rank2]:
+        return -1
+    return 0
+
+
 def compare_declarations(d1, d2):
     """
     Returns:
@@ -261,7 +274,11 @@ def compare_declarations(d1, d2):
     # If both are sequences with same points, higher top card wins
     if d1["type"] == "sequence" and d2["type"] == "sequence":
         return compare_sequence_tops(d1["top_rank"], d2["top_rank"])
-
+    
+    # If both are 4 of a kind, higher card wins
+    if d1["type"] == "four_kind" and d2["type"] == "four_kind":
+        return compare_four_kind(d1["rank"], d2["rank"])
+    
     # Otherwise equal
     return 0
 
@@ -490,13 +507,13 @@ def show_hands_images(hands):
             )
         else:
             log("Team B best declaration: none")
-
+        
         # No declarations at all
         if team_best["A"] is None and team_best["B"] is None:
             log("No declarations on either team.")
             update_score_label()
             return
-
+        
         # Determine winning team
         if team_best["A"] is not None and team_best["B"] is None:
             winner_team = "A"
@@ -554,6 +571,7 @@ def show_hands_images(hands):
 
         update_score_label()
         update_declaration_label()
+        
 
     def new_game():
         log("=== Starting new game ===")
