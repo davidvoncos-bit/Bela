@@ -30,8 +30,8 @@ DECLARATION_ORDER = ["7", "8", "9", "X", "J", "D", "K", "A"]
 # higher(AKDJX987) top card wins
 SEQUENCE_TOP_COMPARE_ORDER = ["7", "8", "9", "X", "J", "D", "K", "A"]
 
-# Example trump suit (could be chosen at game start)
-TRUMP_SUIT = "h"
+# Trump is chosen during bidding
+TRUMP_SUIT = None
 
 CARD_FOLDER = "karte"  # Cropped cards will be stored here
 
@@ -319,6 +319,22 @@ def load_card_image(card, size=(80, 120), rotate=0):
     return ImageTk.PhotoImage(img)
 
 
+def load_misc_image(filename, size=(80, 120), rotate=0):
+    """
+    Loads non-card PNGs, for example card_back.png or suit_h.png.
+    """
+    path = os.path.join(CARD_FOLDER, filename)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Missing image: {path}")
+
+    img = Image.open(path).convert("RGBA").resize(size, Image.Resampling.LANCZOS)
+
+    if rotate:
+        img = img.rotate(rotate, expand=True)
+
+    return ImageTk.PhotoImage(img)
+
+
 def show_hands_images(hands):
     if tk is None:
         print("Image mode unavailable: Tkinter/Pillow not installed.")
@@ -326,7 +342,8 @@ def show_hands_images(hands):
 
     root = tk.Tk()
     root.title("Belote - German Suited Cards")
-    root.geometry("1100x800")
+    root.geometry("1200x920")
+    root.minsize(1100, 850)
 
     def safe_close():
         try:
@@ -354,17 +371,30 @@ def show_hands_images(hands):
     bottom_f.grid(row=2, column=1, pady=8)
     bottom_f.grid_propagate(False)
 
-    left_f = tk.Frame(root, width=260, height=500)
+    left_f = tk.Frame(root, width=280, height=560)
     left_f.grid(row=1, column=0, padx=8, sticky="ns")
     left_f.grid_propagate(False)
 
-    right_f = tk.Frame(root, width=260, height=500)
+    right_f = tk.Frame(root, width=280, height=560)
     right_f.grid(row=1, column=2, padx=8, sticky="ns")
     right_f.grid_propagate(False)
 
     # --- Center "table" ---
     center_f = tk.Frame(root, relief="groove", borderwidth=3, bg="green")
     center_f.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
+    
+    # --- Trump bidding panel shown in the center table ---
+    bidding_f = tk.Frame(center_f, bg="darkgreen", relief="ridge", borderwidth=3)
+    bidding_f.place(relx=0.5, rely=0.5, anchor="center")
+
+    bidding_title = tk.Label(
+        bidding_f,
+        text="Choose trump suit",
+        font=("Arial", 14, "bold"),
+        fg="white",
+        bg="darkgreen"
+    )
+    bidding_title.grid(row=0, column=0, columnspan=5, pady=(8, 4), padx=10)
 
     # --- Root grid sizing ---
     root.grid_rowconfigure(0, weight=1, minsize=260)
@@ -387,7 +417,65 @@ def show_hands_images(hands):
 
     # Current player (0 = bottom, 1 = right, 2 = top, 3 = left)
     current_player = [0]
+    
+    # Dealer / round order
+    # Starting at 3 means the first round behaves like your old code:
+    # Player 0 starts, Player 3 is last.
+    dealer_player = [3]
+    round_first_player = [0]
 
+    def player_after(player_idx):
+        return (player_idx + 1) % 4
+
+    def advance_dealer():
+        dealer_player[0] = player_after(dealer_player[0])
+        round_first_player[0] = player_after(dealer_player[0])
+
+    def bidding_order():
+        start = round_first_player[0]
+        return [(start + i) % 4 for i in range(4)]
+
+    def order_rank(player_idx):
+        """
+        Lower number means this player goes earlier in the current round.
+        Used for declaration tie-breaking.
+        """
+        return bidding_order().index(player_idx)
+
+    # =====================
+    # TRUMP BIDDING STATE
+    # =====================
+    bidding_active = [True]
+    bidding_player = [0]
+
+    # During bidding, everyone starts by seeing only 6 cards.
+    # When a player passes, they are allowed to see all 8.
+    revealed_players = set()
+
+    trump_label = tk.Label(root, text="Trump: not chosen", font=("Arial", 16))
+    trump_label.grid(row=3, column=0, columnspan=3, pady=(4, 0), sticky="ew")
+    
+    bidding_label = tk.Label(root, text="Bidding: Player 0 chooses trump or passes", font=("Arial", 13))
+    bidding_label.grid(row=4, column=0, columnspan=3, pady=(2, 0), sticky="ew")
+    
+    dealer_label = tk.Label(root, text="Dealer: Player 3", font=("Arial", 12))
+    dealer_label.grid(row=5, column=0, columnspan=3, pady=(2, 4), sticky="ew")
+    
+    def update_dealer_label():
+        dealer_label.config(
+            text=(
+                f"Dealer: Player {dealer_player[0]} | "
+                f"First: Player {round_first_player[0]} | "
+                f"Order: {bidding_order()}"
+            )
+        )
+
+    bsuit_buttons = {}
+    pass_button = None
+
+    suit_buttons = {}
+    pass_button = None
+    
     # Track trick progress
     trick_cards = []
     trick_in_progress = [False]
@@ -417,11 +505,11 @@ def show_hands_images(hands):
     
     # Turn indicator
     turn_label = tk.Label(root, text="Turn: Player 0", font=("Arial", 16))
-    turn_label.grid(row=4, column=1, pady=6)
+    turn_label.grid(row=6, column=0, columnspan=3, pady=(2, 0), sticky="ew")
 
     # Score indicator
     score_label = tk.Label(root, text="Scores - Team A: 0 | Team B: 0", font=("Arial", 14))
-    score_label.grid(row=5, column=1, pady=6)
+    score_label.grid(row=7, column=0, columnspan=3, pady=(2, 0), sticky="ew")
     
     # Declaration indicator
     declaration_label = tk.Label(
@@ -431,7 +519,7 @@ def show_hands_images(hands):
     wraplength=900,
     justify="center"
 )
-    declaration_label.grid(row=6, column=1, pady=4)
+    declaration_label.grid(row=8, column=0, columnspan=3, pady=(2, 4), sticky="ew")
 
 
     def apply_declarations():
@@ -488,7 +576,7 @@ def show_hands_images(hands):
                     team_best[team] = best
                     team_best_player[team] = player_idx
                 elif cmp_res == 0:
-                    if player_idx < team_best_player[team]:
+                    if order_rank(player_idx) < order_rank(team_best_player[team]):
                         team_best_player[team] = player_idx
 
         # Log team best declarations
@@ -530,7 +618,9 @@ def show_hands_images(hands):
                 winner_team = "B"
                 strongest_decl = team_best["B"]
             else:
-                if team_best_player["A"] < team_best_player["B"]:
+                # Completely equal declarations:
+                # the player who goes earlier in this round wins.
+                if order_rank(team_best_player["A"]) < order_rank(team_best_player["B"]):
                     winner_team = "A"
                     strongest_decl = team_best["A"]
                 else:
@@ -573,6 +663,141 @@ def show_hands_images(hands):
         update_declaration_label()
         
 
+    def visible_count_for_player(player_idx):
+        """
+        During bidding:
+        - players normally see only 6 cards
+        - players who passed see all 8
+        After bidding:
+        - everyone sees all cards
+        """
+        if not bidding_active[0]:
+            return 8
+
+        if player_idx in revealed_players:
+            return 8
+
+        return 6
+
+
+    def update_bidding_controls():
+        """
+        Enables/disables suit and pass buttons depending on bidding state.
+        Last player must choose trump, so Pass is disabled for Player 3.
+        """
+        if not bidding_active[0]:
+            bidding_label.config(text="Bidding finished.")
+
+            bidding_f.place_forget()
+
+            for btn in suit_buttons.values():
+                btn.config(state="disabled")
+
+            if pass_button is not None:
+                pass_button.config(state="disabled")
+
+            return
+
+        bidding_f.place(relx=0.5, rely=0.5, anchor="center")
+        bidding_f.lift()
+
+        p = bidding_player[0]
+        bidding_label.config(text=f"Bidding: Player {p} chooses trump or passes")
+        bidding_title.config(text=f"Player {p}: choose trump suit")
+
+        for btn in suit_buttons.values():
+            btn.config(state="normal")
+
+        if pass_button is not None:
+            if p == dealer_player[0]:
+                pass_button.config(state="disabled", text="Must choose")
+            else:
+                pass_button.config(state="normal", text="Pass")
+
+
+    def choose_trump(suit):
+        """
+        Called when current bidding player chooses trump.
+        """
+        global TRUMP_SUIT
+
+        TRUMP_SUIT = suit
+        bidding_active[0] = False
+
+        # After trump is chosen, everyone sees all cards.
+        revealed_players.clear()
+        revealed_players.update([0, 1, 2, 3])
+
+        trump_label.config(text=f"Trump: {TRUMP_SUIT}")
+        log(f"Player {bidding_player[0]} chose trump: {TRUMP_SUIT}")
+
+        draw_hands()
+        update_bidding_controls()
+
+        # Declarations should be checked after trump is chosen.
+        apply_declarations()
+
+        current_player[0] = round_first_player[0]
+        turn_label.config(text=f"Turn: Player {current_player[0]}")
+
+
+    def pass_trump():
+        """
+        Current bidding player passes.
+        They now get to see all 8 cards.
+        Next player in bidding order gets the chance to choose.
+        The dealer is last and cannot pass.
+        """
+        order = bidding_order()
+        p = bidding_player[0]
+
+        if p == dealer_player[0]:
+            log(f"Player {p} is dealer and cannot pass. Dealer must choose trump.")
+            return
+
+        log(f"Player {p} passed.")
+        revealed_players.add(p)
+
+        current_pos = order.index(p)
+        bidding_player[0] = order[current_pos + 1]
+        current_player[0] = bidding_player[0]
+
+        draw_hands()
+        update_bidding_controls()
+
+        turn_label.config(text=f"Turn: Player {current_player[0]}")
+
+
+    def start_bidding():
+        """
+        Starts trump selection.
+        Everyone sees only 6 cards at first.
+        Bidding starts with the player after the dealer.
+        The dealer is last and must choose if everyone else passes.
+        """
+        global TRUMP_SUIT
+
+        TRUMP_SUIT = None
+        bidding_active[0] = True
+
+        bidding_player[0] = round_first_player[0]
+
+        revealed_players.clear()
+
+        trump_label.config(text="Trump: not chosen")
+        current_player[0] = bidding_player[0]
+
+        draw_hands()
+        update_bidding_controls()
+        update_dealer_label()
+
+        turn_label.config(text=f"Turn: Player {current_player[0]}")
+        log(
+            f"Trump bidding started. Dealer: Player {dealer_player[0]}. "
+            f"Bidding order: {bidding_order()}"
+        )
+
+
     def new_game():
         log("=== Starting new game ===")
 
@@ -598,13 +823,12 @@ def show_hands_images(hands):
         global deck
         deck = create_deck()
         shuffle_deck(deck)
+        advance_dealer()
         new_hands = deal(deck)
         for i in range(4):
             hands[i] = new_hands[i]
 
-        draw_hands()
-        apply_declarations()
-        turn_label.config(text=f"Turn: Player {current_player[0]}")
+        start_bidding()
 
     def restart_round():
         log("=== Restarting current round ===")
@@ -631,15 +855,48 @@ def show_hands_images(hands):
         for i in range(4):
             hands[i] = new_hands[i]
 
-        draw_hands()
-        apply_declarations()
-        turn_label.config(text=f"Turn: Player {current_player[0]}")
+        start_bidding()
 
     new_game_btn = tk.Button(controls_f, text="New Game", command=new_game)
     new_game_btn.grid(row=0, column=0, padx=10)
 
     restart_round_btn = tk.Button(controls_f, text="Restart Round", command=restart_round)
     restart_round_btn.grid(row=0, column=1, padx=10)
+    
+    # Trump suit buttons, displayed in center_f
+    for col, suit in enumerate(SUITS):
+        try:
+            im = load_misc_image(f"boja_{suit}.png", size=(60, 60))
+            btn = tk.Button(
+                bidding_f,
+                image=im,
+                command=partial(choose_trump, suit),
+                width=70,
+                height=70
+            )
+            btn.image = im
+            root.images.append(im)
+        except FileNotFoundError:
+            btn = tk.Button(
+                bidding_f,
+                text=suit,
+                font=("Arial", 16, "bold"),
+                width=5,
+                height=2,
+                command=partial(choose_trump, suit)
+            )
+
+        btn.grid(row=1, column=col, padx=5, pady=6)
+        suit_buttons[suit] = btn
+
+    pass_button = tk.Button(
+        bidding_f,
+        text="Pass",
+        font=("Arial", 13),
+        width=10,
+        command=pass_trump
+    )
+    pass_button.grid(row=2, column=0, columnspan=4, pady=(4, 10))
 
     def draw_hands():
         """Draw all four players' hands in a 2x4 layout"""
@@ -649,8 +906,8 @@ def show_hands_images(hands):
             card_widgets[i] = []
 
         try:
-            left_f.config(width=280, height=520)
-            right_f.config(width=280, height=520)
+            left_f.config(width=280, height=560)
+            right_f.config(width=280, height=560)
             left_f.grid_propagate(False)
             right_f.grid_propagate(False)
         except Exception:
@@ -668,72 +925,120 @@ def show_hands_images(hands):
         def place_vertical_2x4(lbl, index):
             row = index % 4
             col = index // 4
-            lbl.grid(row=row, column=col, padx=0, pady=1)
-
+            lbl.grid(row=row, column=col, padx=1, pady=0)
+        
         # Bottom player (0)
+        visible_count = visible_count_for_player(0)
+        
         for i, card in enumerate(hands[0]):
+            shown_card = card if i < visible_count else None
+        
             try:
-                im = load_card_image(card, size=(80, 120))
-                lbl = tk.Label(bottom_f, image=im, bd=0)
-                lbl.image = im
-                lbl.card_image = im
-                root.images.append(im)
-                lbl.card_name = card
-                lbl.card_rotate = 0
-                lbl.bind("<Button-1>", partial(on_card_click, 0, card, lbl))
+                if shown_card is None:
+                    im = load_misc_image("prazna_karta.png", size=(80, 120))
+                    lbl = tk.Label(bottom_f, image=im, bd=0)
+                    lbl.image = im
+                    root.images.append(im)
+                else:
+                    im = load_card_image(card, size=(80, 120))
+                    lbl = tk.Label(bottom_f, image=im, bd=0)
+                    lbl.image = im
+                    lbl.card_image = im
+                    root.images.append(im)
+                    lbl.card_name = card
+                    lbl.card_rotate = 0
+                    lbl.bind("<Button-1>", partial(on_card_click, 0, card, lbl))
+        
             except FileNotFoundError:
-                lbl = tk.Label(bottom_f, text=card, font=("Arial", 10))
-
+                text = card if shown_card is not None else "BACK"
+                lbl = tk.Label(bottom_f, text=text, font=("Arial", 10))
+        
             place_horizontal_2x4(lbl, i)
             card_widgets[0].append(lbl)
-
+        
         # Right player (1)
+        visible_count = visible_count_for_player(1)
+        
         for i, card in enumerate(hands[1]):
+            shown_card = card if i < visible_count else None
+        
             try:
-                im = load_card_image(card, size=(80, 120), rotate=-90)
-                lbl = tk.Label(right_f, image=im, bd=0)
-                lbl.image = im
-                lbl.card_image = im
-                root.images.append(im)
-                lbl.card_name = card
-                lbl.card_rotate = -90
-                lbl.bind("<Button-1>", partial(on_card_click, 1, card, lbl))
+                if shown_card is None:
+                    im = load_misc_image("prazna_karta.png", size=(72, 108), rotate=-90)
+                    lbl = tk.Label(right_f, image=im, bd=0)
+                    lbl.image = im
+                    root.images.append(im)
+                else:
+                    im = load_card_image(card, size=(72, 108), rotate=-90)
+                    lbl = tk.Label(right_f, image=im, bd=0)
+                    lbl.image = im
+                    lbl.card_image = im
+                    root.images.append(im)
+                    lbl.card_name = card
+                    lbl.card_rotate = -90
+                    lbl.bind("<Button-1>", partial(on_card_click, 1, card, lbl))
+        
             except FileNotFoundError:
-                lbl = tk.Label(right_f, text=card, font=("Arial", 9))
-
+                text = card if shown_card is not None else "BACK"
+                lbl = tk.Label(right_f, text=text, font=("Arial", 9))
+        
             place_vertical_2x4(lbl, i)
             card_widgets[1].append(lbl)
-
+        
         # Top player (2)
+        visible_count = visible_count_for_player(2)
+
         for i, card in enumerate(hands[2]):
+            shown_card = card if i < visible_count else None
+
             try:
-                im = load_card_image(card, size=(80, 120))
-                lbl = tk.Label(top_f, image=im, bd=0)
-                lbl.image = im
-                lbl.card_image = im
-                root.images.append(im)
-                lbl.card_name = card
-                lbl.card_rotate = 0
-                lbl.bind("<Button-1>", partial(on_card_click, 2, card, lbl))
+                if shown_card is None:
+                    im = load_misc_image("prazna_karta.png", size=(80, 120))
+                    lbl = tk.Label(top_f, image=im, bd=0)
+                    lbl.image = im
+                    root.images.append(im)
+                else:
+                    im = load_card_image(card, size=(80, 120))
+                    lbl = tk.Label(top_f, image=im, bd=0)
+                    lbl.image = im
+                    lbl.card_image = im
+                    root.images.append(im)
+                    lbl.card_name = card
+                    lbl.card_rotate = 0
+                    lbl.bind("<Button-1>", partial(on_card_click, 2, card, lbl))
+
             except FileNotFoundError:
-                lbl = tk.Label(top_f, text=card, font=("Arial", 10))
+                text = card if shown_card is not None else "BACK"
+                lbl = tk.Label(top_f, text=text, font=("Arial", 10))
 
             place_horizontal_2x4(lbl, i)
             card_widgets[2].append(lbl)
 
         # Left player (3)
+        visible_count = visible_count_for_player(3)
+
         for i, card in enumerate(hands[3]):
+            shown_card = card if i < visible_count else None
+
             try:
-                im = load_card_image(card, size=(80, 120), rotate=90)
-                lbl = tk.Label(left_f, image=im, bd=0)
-                lbl.image = im
-                lbl.card_image = im
-                root.images.append(im)
-                lbl.card_name = card
-                lbl.card_rotate = 90
-                lbl.bind("<Button-1>", partial(on_card_click, 3, card, lbl))
+                if shown_card is None:
+                    im = load_misc_image("prazna_karta.png", size=(72, 108), rotate=90)
+                    lbl = tk.Label(left_f, image=im, bd=0)
+                    lbl.image = im
+                    root.images.append(im)
+                else:
+                    im = load_card_image(card, size=(72, 108), rotate=90)
+                    lbl = tk.Label(left_f, image=im, bd=0)
+                    lbl.image = im
+                    lbl.card_image = im
+                    root.images.append(im)
+                    lbl.card_name = card
+                    lbl.card_rotate = 90
+                    lbl.bind("<Button-1>", partial(on_card_click, 3, card, lbl))
+
             except FileNotFoundError:
-                lbl = tk.Label(left_f, text=card, font=("Arial", 9))
+                text = card if shown_card is not None else "BACK"
+                lbl = tk.Label(left_f, text=text, font=("Arial", 9))
 
             place_vertical_2x4(lbl, i)
             card_widgets[3].append(lbl)
@@ -779,6 +1084,14 @@ def show_hands_images(hands):
             played_labels[player_idx] = lbl
 
     def on_card_click(player_idx, card, widget, event=None):
+        if bidding_active[0]:
+            log("You cannot play cards until trump is chosen.")
+            return
+        
+        if TRUMP_SUIT is None:
+            log("Trump suit has not been chosen yet.")
+            return
+        
         log(f"Player {player_idx} played {card}")
 
         if trick_in_progress[0]:
@@ -825,7 +1138,43 @@ def show_hands_images(hands):
         else:
             points_map = {"A": 11, "X": 10, "K": 4, "D": 3, "J": 2, "9": 0, "8": 0, "7": 0}
         return points_map.get(rank, 0)
+    
+    def start_next_round():
+        """
+        Starts a fresh round after all cards have been played.
+        Dealer shifts, new cards are dealt, bidding starts again.
+        Scores stay.
+        """
+        log("=== Starting next round ===")
 
+        for lbl in played_labels:
+            if lbl:
+                lbl.destroy()
+
+        for i in range(4):
+            played_labels[i] = None
+
+        trick_cards.clear()
+        trick_in_progress[0] = False
+
+        declaration_bonus["A"] = 0
+        declaration_bonus["B"] = 0
+        winning_declarations_text[0] = "Declarations: none"
+        update_declaration_label()
+        update_score_label()
+
+        global deck
+        deck = create_deck()
+        shuffle_deck(deck)
+
+        advance_dealer()
+
+        new_hands = deal(deck)
+        for i in range(4):
+            hands[i] = new_hands[i]
+
+        start_bidding()
+    
     def clear_trick():
         """Remove all played cards and determine trick winner."""
         if len(trick_cards) == 4:
@@ -844,7 +1193,9 @@ def show_hands_images(hands):
 
             trick_points = sum(card_points(card, TRUMP_SUIT) for _, card in trick_cards)
 
-            if len(hands[0]) == 0:
+            round_is_over = all(len(hand) == 0 for hand in hands)
+
+            if round_is_over:
                 trick_points += 10
 
             if winner_idx in (0, 2):
@@ -853,6 +1204,13 @@ def show_hands_images(hands):
                 team_scores["B"] += trick_points
 
             update_score_label()
+
+            if round_is_over:
+                log("Round finished.")
+
+                # Start next round automatically after a short delay.
+                root.after(2000, start_next_round)
+                return
 
             current_player[0] = winner_idx
             turn_label.config(text=f"Turn: Player {winner_idx}")
@@ -866,8 +1224,7 @@ def show_hands_images(hands):
         trick_cards.clear()
         trick_in_progress[0] = False
 
-    draw_hands()
-    apply_declarations()
+    start_bidding()
     root.mainloop()
 
 
