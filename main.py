@@ -6,29 +6,21 @@ from functools import partial
 # Optional imports for image mode
 try:
     import tkinter as tk
+    from tkinter import messagebox
     from PIL import Image, ImageTk
     print("Uspjeh")
 except ImportError:
     tk = None  # Stay in text mode if Tkinter/Pillow missing
     print("Minus")
 
-
-# =====================
-# CONFIGURATION
-# =====================
-RANKS = ["7", "8", "9", "X", "J", "D", "K", "A"]   # Unter=J, Ober=Q
-SUITS = ["t", "k", "h", "p"]  # Eichel, Grün, Herz, Schellen
-
-# Rank order for non-trump and trump
-NON_TRUMP_ORDER = ["7", "8", "9", "J", "D", "K", "X", "A"]
-TRUMP_ORDER = ["7", "8", "D", "K", "X", "A", "9", "J"]
-
-# For declarations: runs are checked in this order
-DECLARATION_ORDER = ["7", "8", "9", "X", "J", "D", "K", "A"]
-
-# For comparing top card of sequences:
-# higher(AKDJX987) top card wins
-SEQUENCE_TOP_COMPARE_ORDER = ["7", "8", "9", "X", "J", "D", "K", "A"]
+from rules import (
+    RANKS, SUITS,
+    create_deck, shuffle_deck, deal,
+    card_value, legal_moves, card_points,
+    find_declarations, declaration_to_text,
+    compare_declarations, best_declaration_for_player,
+    team_of_player, total_declaration_points,
+)
 
 # Trump is chosen during bidding
 TRUMP_SUIT = None
@@ -36,271 +28,10 @@ TRUMP_SUIT = None
 CARD_FOLDER = "karte"  # Cropped cards will be stored here
 
 
-# =====================
-# CORE GAME FUNCTIONS
-# =====================
-def create_deck():
-    return [f"{rank}{suit}" for suit in SUITS for rank in RANKS]
-
-
-def shuffle_deck(deck):
-    random.shuffle(deck)
-
-
-def sort_key(a):
-    vrati = 8 * SUITS.index(a[1])
-    vrati += RANKS.index(a[0])
-    return vrati
-
-
-def sort_cards(hands):
-    for i in range(4):
-        hands[i].sort(key=sort_key)
-    return hands
-
-
-def deal(deck):
-    return sort_cards([deck[i*8:(i+1)*8] for i in range(4)])
-
-
-def card_value(card, lead_suit, trump_suit):
-    """Return a tuple for comparing trick cards."""
-    rank, suit = card[:-1], card[-1]
-
-    if suit == trump_suit:
-        return (2, TRUMP_ORDER.index(rank))  # trump beats everything
-    elif suit == lead_suit:
-        return (1, NON_TRUMP_ORDER.index(rank))  # same suit as lead
-    else:
-        return (0, NON_TRUMP_ORDER.index(rank))  # irrelevant suit
-
-
-def legal_moves(hand, trick_cards, trump_suit):
-    """Return the set of legal cards the player can play under Belote rules."""
-    if not trick_cards:  # Player is leading
-        return set(hand)
-
-    lead_suit = trick_cards[0][1][-1]
-
-    follow = [c for c in hand if c[-1] == lead_suit]
-    if not follow:
-        follow = [c for c in hand if c[-1] == trump_suit]
-    if not follow:
-        return set(hand)
-
-    highest_val = (-1, -1)
-    for _, card in trick_cards:
-        val = card_value(card, lead_suit, trump_suit)
-        if val > highest_val:
-            highest_val = val
-
-    better_follow = [c for c in follow if card_value(c, lead_suit, trump_suit) > highest_val]
-    return set(better_follow) if better_follow else set(follow)
-
-
 def show_hands_text(hands):
     for i, hand in enumerate(hands, start=1):
         print(f"Player {i}: {' '.join(hand)}")
 
-
-# =====================
-# DECLARATIONS
-# =====================
-def four_kind_points(rank):
-    """Returns points for four of a kind, or None if not a valid declaration."""
-    if rank in ("7", "8"):
-        return None
-    if rank == "J":
-        return 200
-    if rank == "9":
-        return 150
-    return 100  # X, D, K, A
-
-
-def sequence_points(length):
-    """Returns points for a sequence, or None if too short."""
-    if length < 3:
-        return None
-    if length == 3:
-        return 20
-    if length == 4:
-        return 50
-    return 100  # 5+
-
-
-def find_four_of_a_kind(hand):
-    """
-    Valid four-of-a-kind declarations only.
-    4x7 and 4x8 are ignored.
-    """
-    by_rank = {}
-    for card in hand:
-        rank = card[:-1]
-        by_rank.setdefault(rank, []).append(card)
-
-    declarations = []
-    for rank, cards in by_rank.items():
-        if len(cards) == 4:
-            pts = four_kind_points(rank)
-            if pts is not None:
-                declarations.append({
-                    "type": "four_kind",
-                    "rank": rank,
-                    "cards": sorted(cards, key=sort_key),
-                    "points": pts,
-                    "top_rank": rank
-                })
-    return declarations
-
-
-def find_sequences(hand):
-    """
-    Returns maximal same-suit runs of length >= 3.
-    Example: 7h 8h 9h Xh -> one sequence of 4
-    """
-    declarations = []
-    order_index = {rank: i for i, rank in enumerate(DECLARATION_ORDER)}
-
-    by_suit = {}
-    for card in hand:
-        rank, suit = card[:-1], card[-1]
-        by_suit.setdefault(suit, []).append(card)
-
-    for suit, cards in by_suit.items():
-        sorted_cards = sorted(cards, key=lambda c: order_index[c[:-1]])
-        indices = [order_index[c[:-1]] for c in sorted_cards]
-
-        start = 0
-        for i in range(1, len(indices) + 1):
-            if i < len(indices) and indices[i] == indices[i - 1] + 1:
-                continue
-
-            run_cards = sorted_cards[start:i]
-            run_len = len(run_cards)
-            pts = sequence_points(run_len)
-            if pts is not None:
-                declarations.append({
-                    "type": "sequence",
-                    "suit": suit,
-                    "length": run_len,
-                    "cards": run_cards,
-                    "points": pts,
-                    "top_rank": run_cards[-1][:-1]
-                })
-            start = i
-
-    return declarations
-
-
-def find_declarations(hand):
-    declarations = []
-    declarations.extend(find_four_of_a_kind(hand))
-    declarations.extend(find_sequences(hand))
-    return declarations
-
-
-def declaration_to_text(declaration):
-    if declaration["type"] == "four_kind":
-        return f"four of a kind {declaration['rank']} ({' '.join(declaration['cards'])}) -> {declaration['points']}"
-
-    if declaration["type"] == "sequence":
-        return (
-            f"sequence {declaration['length']} in suit {declaration['suit']} "
-            f"({' '.join(declaration['cards'])}) -> {declaration['points']}"
-        )
-
-    return str(declaration)
-
-
-def compare_sequence_tops(rank1, rank2):
-    """
-    Compare sequence top cards using order AKDJX987 where higher wins.
-    Internally we map that to increasing strength: 7 < 8 < 9 < X < J < D < K < A.
-    """
-    idx = {rank: i for i, rank in enumerate(SEQUENCE_TOP_COMPARE_ORDER)}
-    if idx[rank1] > idx[rank2]:
-        return 1
-    if idx[rank1] < idx[rank2]:
-        return -1
-    return 0
-
-
-def compare_four_kind(rank1, rank2):
-    """
-    Compare sequence top cards using order AXKDJ987 where higher wins.
-    Internally we map that to increasing strength: 7 < 8 < 9 < J < D < K < X < A.
-    """
-    idx = {rank: i for i, rank in enumerate(NON_TRUMP_ORDER)}
-    if idx[rank1] > idx[rank2]:
-        return 1
-    if idx[rank1] < idx[rank2]:
-        return -1
-    return 0
-
-
-def compare_declarations(d1, d2):
-    """
-    Returns:
-      1  if d1 stronger
-     -1  if d2 stronger
-      0  if equal
-
-    Rules:
-    - Higher points wins
-    - Exception:
-        5+ sequence beats only 100-point four of a kind
-    - If both are sequences with same points, higher top card wins
-    - If still same, equal
-    """
-
-    d1_is_long_seq = (d1["type"] == "sequence" and d1["length"] >= 5)
-    d2_is_long_seq = (d2["type"] == "sequence" and d2["length"] >= 5)
-
-    d1_is_100_four = (d1["type"] == "four_kind" and d1["points"] == 100)
-    d2_is_100_four = (d2["type"] == "four_kind" and d2["points"] == 100)
-
-    # Special rule: 5+ sequence beats only 100-point four of a kind
-    if d1_is_long_seq and d2_is_100_four:
-        return 1
-    if d2_is_long_seq and d1_is_100_four:
-        return -1
-
-    # General rule: points first
-    if d1["points"] > d2["points"]:
-        return 1
-    if d1["points"] < d2["points"]:
-        return -1
-
-    # If both are sequences with same points, higher top card wins
-    if d1["type"] == "sequence" and d2["type"] == "sequence":
-        return compare_sequence_tops(d1["top_rank"], d2["top_rank"])
-    
-    # If both are 4 of a kind, higher card wins
-    if d1["type"] == "four_kind" and d2["type"] == "four_kind":
-        return compare_four_kind(d1["rank"], d2["rank"])
-    
-    # Otherwise equal
-    return 0
-
-
-def best_declaration_for_player(declarations):
-    """Returns strongest declaration in a player's list, or None."""
-    if not declarations:
-        return None
-
-    best = declarations[0]
-    for d in declarations[1:]:
-        if compare_declarations(d, best) == 1:
-            best = d
-    return best
-
-
-def team_of_player(player_idx):
-    return "A" if player_idx in (0, 2) else "B"
-
-
-def total_declaration_points(declarations):
-    return sum(d["points"] for d in declarations)
 
 
 # =====================
@@ -441,7 +172,9 @@ def show_hands_images(hands):
         Used for declaration tie-breaking.
         """
         return bidding_order().index(player_idx)
-
+    
+    
+    
     # =====================
     # TRUMP BIDDING STATE
     # =====================
@@ -485,7 +218,6 @@ def show_hands_images(hands):
     
     # Pending declaration points (shown separately, not yet merged into score)
     declaration_bonus = {"A": 0, "B": 0}
-    winning_declarations_text = ["Winning declarations: none"]
     def update_score_label():
         def fmt(team):
             base = team_scores[team]
@@ -671,6 +403,9 @@ def show_hands_images(hands):
         After bidding:
         - everyone sees all cards
         """
+        if is_bot(player_idx):
+            return 0
+    
         if not bidding_active[0]:
             return 8
 
@@ -739,6 +474,8 @@ def show_hands_images(hands):
 
         current_player[0] = round_first_player[0]
         turn_label.config(text=f"Turn: Player {current_player[0]}")
+        
+        root.after(500, maybe_bot_play)
 
 
     def pass_trump():
@@ -766,6 +503,7 @@ def show_hands_images(hands):
         update_bidding_controls()
 
         turn_label.config(text=f"Turn: Player {current_player[0]}")
+        root.after(500, maybe_bot_bid)
 
 
     def start_bidding():
@@ -796,6 +534,7 @@ def show_hands_images(hands):
             f"Trump bidding started. Dealer: Player {dealer_player[0]}. "
             f"Bidding order: {bidding_order()}"
         )
+        root.after(500, maybe_bot_bid)
 
 
     def new_game():
@@ -927,121 +666,144 @@ def show_hands_images(hands):
             col = index // 4
             lbl.grid(row=row, column=col, padx=1, pady=0)
         
+        def draw_bot_placeholder(frame, player_idx):
+            lbl = tk.Label(
+                frame,
+                text=f"Bot Player {player_idx}\n{len(hands[player_idx])} cards",
+                font=("Arial", 14, "bold"),
+                justify="center"
+            )
+        
+            lbl.place(relx=0.5, rely=0.5, anchor="center")
+            card_widgets[player_idx].append(lbl)
+        
         # Bottom player (0)
-        visible_count = visible_count_for_player(0)
-        
-        for i, card in enumerate(hands[0]):
-            shown_card = card if i < visible_count else None
-        
-            try:
-                if shown_card is None:
-                    im = load_misc_image("prazna_karta.png", size=(80, 120))
-                    lbl = tk.Label(bottom_f, image=im, bd=0)
-                    lbl.image = im
-                    root.images.append(im)
-                else:
-                    im = load_card_image(card, size=(80, 120))
-                    lbl = tk.Label(bottom_f, image=im, bd=0)
-                    lbl.image = im
-                    lbl.card_image = im
-                    root.images.append(im)
-                    lbl.card_name = card
-                    lbl.card_rotate = 0
-                    lbl.bind("<Button-1>", partial(on_card_click, 0, card, lbl))
-        
-            except FileNotFoundError:
-                text = card if shown_card is not None else "BACK"
-                lbl = tk.Label(bottom_f, text=text, font=("Arial", 10))
-        
-            place_horizontal_2x4(lbl, i)
-            card_widgets[0].append(lbl)
+        if is_bot(0):
+            draw_bot_placeholder(bottom_f, 0)
+        else:
+            visible_count = visible_count_for_player(0)
+            
+            for i, card in enumerate(hands[0]):
+                shown_card = card if i < visible_count else None
+            
+                try:
+                    if shown_card is None:
+                        im = load_misc_image("prazna_karta.png", size=(80, 120))
+                        lbl = tk.Label(bottom_f, image=im, bd=0)
+                        lbl.image = im
+                        root.images.append(im)
+                    else:
+                        im = load_card_image(card, size=(80, 120))
+                        lbl = tk.Label(bottom_f, image=im, bd=0)
+                        lbl.image = im
+                        lbl.card_image = im
+                        root.images.append(im)
+                        lbl.card_name = card
+                        lbl.card_rotate = 0
+                        lbl.bind("<Button-1>", partial(on_card_click, 0, card, lbl))
+            
+                except FileNotFoundError:
+                    text = card if shown_card is not None else "BACK"
+                    lbl = tk.Label(bottom_f, text=text, font=("Arial", 10))
+            
+                place_horizontal_2x4(lbl, i)
+                card_widgets[0].append(lbl)
         
         # Right player (1)
-        visible_count = visible_count_for_player(1)
-        
-        for i, card in enumerate(hands[1]):
-            shown_card = card if i < visible_count else None
-        
-            try:
-                if shown_card is None:
-                    im = load_misc_image("prazna_karta.png", size=(72, 108), rotate=-90)
-                    lbl = tk.Label(right_f, image=im, bd=0)
-                    lbl.image = im
-                    root.images.append(im)
-                else:
-                    im = load_card_image(card, size=(72, 108), rotate=-90)
-                    lbl = tk.Label(right_f, image=im, bd=0)
-                    lbl.image = im
-                    lbl.card_image = im
-                    root.images.append(im)
-                    lbl.card_name = card
-                    lbl.card_rotate = -90
-                    lbl.bind("<Button-1>", partial(on_card_click, 1, card, lbl))
-        
-            except FileNotFoundError:
-                text = card if shown_card is not None else "BACK"
-                lbl = tk.Label(right_f, text=text, font=("Arial", 9))
-        
-            place_vertical_2x4(lbl, i)
-            card_widgets[1].append(lbl)
+        if is_bot(1):
+            draw_bot_placeholder(right_f, 1)
+        else:
+            visible_count = visible_count_for_player(1)
+            
+            for i, card in enumerate(hands[1]):
+                shown_card = card if i < visible_count else None
+            
+                try:
+                    if shown_card is None:
+                        im = load_misc_image("prazna_karta.png", size=(72, 108), rotate=-90)
+                        lbl = tk.Label(right_f, image=im, bd=0)
+                        lbl.image = im
+                        root.images.append(im)
+                    else:
+                        im = load_card_image(card, size=(72, 108), rotate=-90)
+                        lbl = tk.Label(right_f, image=im, bd=0)
+                        lbl.image = im
+                        lbl.card_image = im
+                        root.images.append(im)
+                        lbl.card_name = card
+                        lbl.card_rotate = -90
+                        lbl.bind("<Button-1>", partial(on_card_click, 1, card, lbl))
+            
+                except FileNotFoundError:
+                    text = card if shown_card is not None else "BACK"
+                    lbl = tk.Label(right_f, text=text, font=("Arial", 9))
+            
+                place_vertical_2x4(lbl, i)
+                card_widgets[1].append(lbl)
         
         # Top player (2)
-        visible_count = visible_count_for_player(2)
-
-        for i, card in enumerate(hands[2]):
-            shown_card = card if i < visible_count else None
-
-            try:
-                if shown_card is None:
-                    im = load_misc_image("prazna_karta.png", size=(80, 120))
-                    lbl = tk.Label(top_f, image=im, bd=0)
-                    lbl.image = im
-                    root.images.append(im)
-                else:
-                    im = load_card_image(card, size=(80, 120))
-                    lbl = tk.Label(top_f, image=im, bd=0)
-                    lbl.image = im
-                    lbl.card_image = im
-                    root.images.append(im)
-                    lbl.card_name = card
-                    lbl.card_rotate = 0
-                    lbl.bind("<Button-1>", partial(on_card_click, 2, card, lbl))
-
-            except FileNotFoundError:
-                text = card if shown_card is not None else "BACK"
-                lbl = tk.Label(top_f, text=text, font=("Arial", 10))
-
-            place_horizontal_2x4(lbl, i)
-            card_widgets[2].append(lbl)
+        if is_bot(2):
+            draw_bot_placeholder(top_f, 2)
+        else:
+            visible_count = visible_count_for_player(2)
+    
+            for i, card in enumerate(hands[2]):
+                shown_card = card if i < visible_count else None
+    
+                try:
+                    if shown_card is None:
+                        im = load_misc_image("prazna_karta.png", size=(80, 120))
+                        lbl = tk.Label(top_f, image=im, bd=0)
+                        lbl.image = im
+                        root.images.append(im)
+                    else:
+                        im = load_card_image(card, size=(80, 120))
+                        lbl = tk.Label(top_f, image=im, bd=0)
+                        lbl.image = im
+                        lbl.card_image = im
+                        root.images.append(im)
+                        lbl.card_name = card
+                        lbl.card_rotate = 0
+                        lbl.bind("<Button-1>", partial(on_card_click, 2, card, lbl))
+    
+                except FileNotFoundError:
+                    text = card if shown_card is not None else "BACK"
+                    lbl = tk.Label(top_f, text=text, font=("Arial", 10))
+    
+                place_horizontal_2x4(lbl, i)
+                card_widgets[2].append(lbl)
 
         # Left player (3)
-        visible_count = visible_count_for_player(3)
-
-        for i, card in enumerate(hands[3]):
-            shown_card = card if i < visible_count else None
-
-            try:
-                if shown_card is None:
-                    im = load_misc_image("prazna_karta.png", size=(72, 108), rotate=90)
-                    lbl = tk.Label(left_f, image=im, bd=0)
-                    lbl.image = im
-                    root.images.append(im)
-                else:
-                    im = load_card_image(card, size=(72, 108), rotate=90)
-                    lbl = tk.Label(left_f, image=im, bd=0)
-                    lbl.image = im
-                    lbl.card_image = im
-                    root.images.append(im)
-                    lbl.card_name = card
-                    lbl.card_rotate = 90
-                    lbl.bind("<Button-1>", partial(on_card_click, 3, card, lbl))
-
-            except FileNotFoundError:
-                text = card if shown_card is not None else "BACK"
-                lbl = tk.Label(left_f, text=text, font=("Arial", 9))
-
-            place_vertical_2x4(lbl, i)
-            card_widgets[3].append(lbl)
+        if is_bot(3):
+            draw_bot_placeholder(left_f, 3)
+        else:
+            visible_count = visible_count_for_player(3)
+    
+            for i, card in enumerate(hands[3]):
+                shown_card = card if i < visible_count else None
+    
+                try:
+                    if shown_card is None:
+                        im = load_misc_image("prazna_karta.png", size=(72, 108), rotate=90)
+                        lbl = tk.Label(left_f, image=im, bd=0)
+                        lbl.image = im
+                        root.images.append(im)
+                    else:
+                        im = load_card_image(card, size=(72, 108), rotate=90)
+                        lbl = tk.Label(left_f, image=im, bd=0)
+                        lbl.image = im
+                        lbl.card_image = im
+                        root.images.append(im)
+                        lbl.card_name = card
+                        lbl.card_rotate = 90
+                        lbl.bind("<Button-1>", partial(on_card_click, 3, card, lbl))
+    
+                except FileNotFoundError:
+                    text = card if shown_card is not None else "BACK"
+                    lbl = tk.Label(left_f, text=text, font=("Arial", 9))
+    
+                place_vertical_2x4(lbl, i)
+                card_widgets[3].append(lbl)
 
     def get_image_for_card(card, rotate=0):
         for widgets in card_widgets:
@@ -1082,62 +844,94 @@ def show_hands_images(hands):
             lbl = tk.Label(center_f, text=card, font=("Arial", 12), bg="green")
             lbl.place(**positions[player_idx])
             played_labels[player_idx] = lbl
+    
+    def maybe_ask_bela(player_idx, card):
+        if TRUMP_SUIT is None:
+            return
 
-    def on_card_click(player_idx, card, widget, event=None):
+        rank, suit = card[:-1], card[-1]
+
+        # Bela je samo K + D u adutu
+        if suit != TRUMP_SUIT or rank not in ("K", "D"):
+            return
+
+        # Važno: ova funkcija se poziva PRIJE micanja karte iz ruke.
+        # Zato pri prvoj od dvije karte igrač još ima obje.
+        if f"K{TRUMP_SUIT}" not in hands[player_idx]:
+            return
+        if f"D{TRUMP_SUIT}" not in hands[player_idx]:
+            return
+
+        wants_bela = messagebox.askyesno(
+            "Bela",
+            f"Player {player_idx} ima kralja i damu u adutu.\nŽeli li zvati belu?"
+        )
+
+        if wants_bela:
+            team = team_of_player(player_idx)
+            declaration_bonus[team] += 20
+            log(f"Player {player_idx} called bela. Team {team} gets +20 pending.")
+            update_score_label()
+        else:
+            log(f"Player {player_idx} did not call bela.")
+    
+    def play_card(player_idx, card, widget=None):
         if bidding_active[0]:
             log("You cannot play cards until trump is chosen.")
             return
-        
+    
         if TRUMP_SUIT is None:
             log("Trump suit has not been chosen yet.")
             return
-        
-        log(f"Player {player_idx} played {card}")
-
+    
         if trick_in_progress[0]:
             return
-
+    
         if player_idx != current_player[0]:
             log(f"Not Player {player_idx}'s turn.")
             return
-
+    
         allowed = legal_moves(hands[player_idx], trick_cards, TRUMP_SUIT)
         if card not in allowed:
             log(f"Illegal move: {card}. Allowed: {allowed}")
             return
-
+    
+        # Ako si već dodao belu, ovo ide ovdje, PRIJE micanja karte iz ruke
+        # maybe_ask_bela(player_idx, card)
+    
         try:
             idx = hands[player_idx].index(card)
         except ValueError:
             log(f"Card {card} not found in Player {player_idx}'s hand (maybe already played).")
             return
-
+    
         hands[player_idx].pop(idx)
-
-        if widget in card_widgets[player_idx]:
-            card_widgets[player_idx].remove(widget)
-        try:
-            widget.destroy()
-        except Exception:
-            pass
-
+    
+        if widget is not None:
+            if widget in card_widgets[player_idx]:
+                card_widgets[player_idx].remove(widget)
+            try:
+                widget.destroy()
+            except Exception:
+                pass
+    
         trick_cards.append((player_idx, card))
         place_played_card(player_idx, card)
-
+    
+        log(f"Player {player_idx} played {card}")
+    
         if len(trick_cards) == 4:
             trick_in_progress[0] = True
             root.after(1500, clear_trick)
-
-        current_player[0] = (current_player[0] + 1) % 4
-        turn_label.config(text=f"Turn: Player {current_player[0]}")
-
-    def card_points(card, trump_suit):
-        rank, suit = card[:-1], card[-1]
-        if suit == trump_suit:
-            points_map = {"J": 20, "9": 14, "A": 11, "X": 10, "K": 4, "D": 3, "8": 0, "7": 0}
         else:
-            points_map = {"A": 11, "X": 10, "K": 4, "D": 3, "J": 2, "9": 0, "8": 0, "7": 0}
-        return points_map.get(rank, 0)
+            current_player[0] = (current_player[0] + 1) % 4
+            turn_label.config(text=f"Turn: Player {current_player[0]}")
+            root.after(500, maybe_bot_play)
+    
+        draw_hands()
+    
+    def on_card_click(player_idx, card, widget, event=None):
+        play_card(player_idx, card, widget)
     
     def start_next_round():
         """
@@ -1214,6 +1008,7 @@ def show_hands_images(hands):
 
             current_player[0] = winner_idx
             turn_label.config(text=f"Turn: Player {winner_idx}")
+            root.after(500, maybe_bot_play)
 
         for lbl in played_labels:
             if lbl is not None:
@@ -1223,7 +1018,87 @@ def show_hands_images(hands):
 
         trick_cards.clear()
         trick_in_progress[0] = False
+    
+    
+    
+    # =====================
+    # BOT HELPERS
+    # =====================
+    from bots import RandomBot
+    
+    players = [
+    "human",
+    RandomBot(),
+    RandomBot(),
+    RandomBot(),
+]
 
+    def is_bot(player_idx):
+        return players[player_idx] != "human"
+    
+    def is_human(player_idx):
+        return players[player_idx] == "human"
+    
+    def get_state_for_bot(player_idx):
+        return {
+            "my_hand": hands[player_idx].copy(),
+            "trump_suit": TRUMP_SUIT,
+            "current_player": current_player[0],
+            "trick_cards": trick_cards.copy(),
+            "team_scores": team_scores.copy(),
+            "declaration_bonus": declaration_bonus.copy(),
+            "dealer_player": dealer_player[0],
+            "round_first_player": round_first_player[0],
+            "bidding_active": bidding_active[0],
+            "bidding_player": bidding_player[0],
+        }
+    
+    
+    def maybe_bot_play():
+        if bidding_active[0]:
+            return
+    
+        p = current_player[0]
+    
+        if not is_bot(p):
+            return
+    
+        allowed = legal_moves(hands[p], trick_cards, TRUMP_SUIT)
+        bot = players[p]
+        state = get_state_for_bot(p)
+        card = bot.choose_card(state, p, allowed)
+    
+        if card not in allowed:
+            log(f"Bot Player {p} chose illegal card: {card}. Allowed: {allowed}")
+            return
+    
+        root.after(500, lambda p=p, card=card: play_card(p, card))
+    
+    
+    def maybe_bot_bid():
+        if not bidding_active[0]:
+            return
+    
+        p = bidding_player[0]
+    
+        if not is_bot(p):
+            return
+    
+        bot = players[p]
+        state = get_state_for_bot(p)
+        choice = bot.choose_trump(state, p)
+    
+        if p == dealer_player[0] and choice == "pass":
+            choice = random.choice(SUITS)
+    
+        if choice == "pass":
+            root.after(500, pass_trump)
+        elif choice in SUITS:
+            root.after(500, lambda: choose_trump(choice))
+        else:
+            log(f"Bot Player {p} made invalid trump choice: {choice}")
+    
+    
     start_bidding()
     root.mainloop()
 
